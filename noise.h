@@ -2,6 +2,7 @@
 #define _NOISE_H_
 
 #include "prng.h"
+#include <cmath>
 
 // Structure to hold noise values in spatial and frequency domains
 typedef struct Noise_com
@@ -9,8 +10,15 @@ typedef struct Noise_com
     float noise_val; // Spatial domain noise value
     float noise_fre; // Frequency domain noise value
 };
-
 class Noise
+{
+public:
+    virtual ~Noise() {}
+    virtual Noise_com calculate(float x, float y) = 0;
+    virtual float variance() = 0;
+};
+
+class GaborNoise : public Noise
 {
 private:
     float K_;                // Amplitude of Gabor kernel
@@ -25,7 +33,7 @@ private:
 
 public:
     // Constructor to initialize noise parameters
-    Noise(float K, float a, float F_0, float omega_0, bool isotropic, float number_of_impulses_per_kernel, unsigned period, unsigned random_offset)
+    GaborNoise(float K, float a, float F_0, float omega_0, bool isotropic, float number_of_impulses_per_kernel, unsigned period, unsigned random_offset)
         : K_(K), a_(a), F_0_(F_0), omega_0_(omega_0), isotropic_(isotropic), period_(period), random_offset_(random_offset)
     {
         kernel_radius_ = std::sqrt(-std::log(0.05) / M_PI) / a_;
@@ -36,19 +44,39 @@ public:
     unsigned morton(unsigned x, unsigned y);
 
     // Placeholder for Gabor kernel calculation
-    float gabor(float K, float a, float F_0, float omega_0, float x, float y) { return 0.0f; }
+    float gabor(float K, float a, float F_0, float omega_0, float x, float y);
 
     // Placeholder for frequency domain Gabor kernel
-    float gabor_fre(float K, float a, float F_0, float omega_0, float x, float y) { return 0.0f; }
+    float gabor_fre(float K, float a, float F_0, float omega_0, float x, float y);
 
     // Placeholder for noise calculation
-    Noise_com calculate(float x, float y) { return Noise_com{0.0f, 0.0f}; }
+    Noise_com calculate(float x, float y) override;
 
     // Placeholder for cell-based noise calculation
-    Noise_com cell(int i, int j, float x, float y) { return Noise_com{0.0f, 0.0f}; }
+    Noise_com cell(int i, int j, float x, float y);
 
     // Placeholder for variance calculation
-    float variance() { return 0.0f; }
+    float variance() override;
+};
+
+class PerlinNoise : public Noise
+{
+private:
+    float scale_;
+    unsigned random_offset_;
+    float *gradients_;
+    static const int grid_size_ = 256;
+
+public:
+    PerlinNoise(float scale, unsigned random_offset);
+    ~PerlinNoise() { delete[] gradients_; }
+    Noise_com calculate(float x, float y) override;
+    float variance() override;
+
+private:
+    float lerp(float a, float b, float t);
+    float dot_grid_gradient(int ix, int iy, float x, float y);
+    void init_gradients(unsigned seed);
 };
 
 #endif
