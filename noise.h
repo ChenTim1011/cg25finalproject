@@ -5,7 +5,7 @@
 #include <cmath>
 
 // Structure to hold noise values in spatial and frequency domains
-typedef struct Noise_com
+struct Noise_com
 {
     float noise_val; // Spatial domain noise value
     float noise_fre; // Frequency domain noise value
