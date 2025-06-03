@@ -1,7 +1,7 @@
 #include "noise.h"
 #include <cmath>
 
-unsigned Noise::morton(unsigned x, unsigned y)
+unsigned GaborNoise::morton(unsigned x, unsigned y)
 {
     unsigned z = 0;
     for (unsigned i = 0; i < (sizeof(unsigned) * CHAR_BIT); ++i)
@@ -11,14 +11,14 @@ unsigned Noise::morton(unsigned x, unsigned y)
     return z;
 }
 
-float Noise::gabor(float K, float a, float F_0, float omega_0, float x, float y)
+float GaborNoise::gabor(float K, float a, float F_0, float omega_0, float x, float y)
 {
     float gaussian_envelop = K * std::exp(-M_PI * (a * a) * ((x * x) + (y * y)));
     float sinusoidal_carrier = std::cos(2.0 * M_PI * F_0 * ((x * std::cos(omega_0)) + (y * std::sin(omega_0))));
     return gaussian_envelop * sinusoidal_carrier;
 }
 
-float Noise::gabor_fre(float K, float a, float F_0, float omega_0, float x, float y)
+float GaborNoise::gabor_fre(float K, float a, float F_0, float omega_0, float x, float y)
 {
     float f_cos = F_0 * std::cos(omega_0);
     float f_sin = F_0 * std::sin(omega_0);
@@ -28,10 +28,9 @@ float Noise::gabor_fre(float K, float a, float F_0, float omega_0, float x, floa
     return rst;
 }
 
-Noise_com Noise::calculate(float x, float y)
+Noise_com GaborNoise::calculate(float x, float y)
 {
-    x /= kernel_radius_;
-    y /= kernel_radius_;
+    x /= kernel_radius_, y /= kernel_radius_;
     float int_x = std::floor(x), int_y = std::floor(y);
     float frac_x = x - int_x, frac_y = y - int_y;
     int i = int(int_x), j = int(int_y);
@@ -53,7 +52,7 @@ Noise_com Noise::calculate(float x, float y)
     return rst;
 }
 
-Noise_com Noise::cell(int i, int j, float x, float y)
+Noise_com GaborNoise::cell(int i, int j, float x, float y)
 {
     float int_x = (float)i;
     float int_y = (float)j;
@@ -94,8 +93,7 @@ Noise_com Noise::cell(int i, int j, float x, float y)
     return rst;
 }
 
-// Calculate variance of the noise for normalization
-float Noise::variance()
+float GaborNoise::variance()
 {
     float integral_gabor_filter_squared = ((K_ * K_) / (4.0 * a_ * a_)) * (1.0 + std::exp(-(2.0 * M_PI * F_0_ * F_0_) / (a_ * a_)));
     return impulse_density_ * (1.0 / 3.0) * integral_gabor_filter_squared;
