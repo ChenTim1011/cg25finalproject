@@ -1,3 +1,4 @@
+#define CVUI_IMPLEMENTATION
 #include "cvui.h"
 #include "prng.h"
 #include "noise.h"
@@ -6,7 +7,7 @@
 using namespace cv;
 
 // Window name for the GUI
-#define WINDOW_NAME "GABOR_NOISE"
+#define WINDOW_NAME "NOISE_GENERATOR"
 
 // Convert float intensity to 8-bit grayscale value
 unsigned char uniform(float intensity)
@@ -26,13 +27,22 @@ unsigned char uniform(float intensity)
 }
 
 // Generate noise images and single kernel for display
-uchar *process(unsigned resolution, float K_, float a_, float F_0_, float omega_0_, bool isotropic, float number_of_impulses_per_kernel, unsigned period, unsigned random_offset)
+uchar *process(unsigned resolution, float K_, float a_, float F_0_, float omega_0_, bool isotropic,
+               float number_of_impulses_per_kernel, unsigned period, unsigned random_offset, int noise_type, float perlin_scale)
 {
     // Initialize noise generator with given parameters
-    Noise noise_(K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset);
+    Noise *noise;
+    if (noise_type == 0)
+    {
+        noise = new GaborNoise(K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset);
+    }
+    else
+    {
+        noise = new PerlinNoise(perlin_scale, random_offset);
+    }
     float *image_val = new float[resolution * resolution];
     float *image_fre = new float[resolution * resolution];
-    float scale = 3.0 * std::sqrt(noise_.variance());
+    float scale = 3.0 * std::sqrt(noise->variance());
 
     // Compute noise in spatial and frequency domains
     for (unsigned row = 0; row < resolution; ++row)
@@ -41,7 +51,7 @@ uchar *process(unsigned resolution, float K_, float a_, float F_0_, float omega_
         {
             float x = (float(col) + 0.5) - (float(resolution) / 2.0);
             float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
-            Noise_com val = noise_.calculate(x, y);
+            Noise_com val = noise->calculate(x, y);
             image_val[(row * resolution) + col] = 0.5 + (0.5 * (val.noise_val / scale));
             image_fre[(row * resolution) + col] = val.noise_fre;
         }
@@ -61,20 +71,72 @@ uchar *process(unsigned resolution, float K_, float a_, float F_0_, float omega_
 
     // Compute single Gabor kernel in frequency domain
     uchar *kernel_fre = new uchar[resolution * resolution];
-    for (unsigned row = 0; row < resolution; ++row)
+    if (noise_type == 0)
     {
-        for (unsigned col = 0; col < resolution; ++col)
+        for (unsigned row = 0; row < resolution; ++row)
         {
-            float x = (float(col) + 0.5) - (float(resolution) / 2.0);
-            float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
-            x = x / (float)resolution;
-            y = y / (float)resolution;
-            float f_cos = F_0_ * std::cos(omega_0_);
-            float f_sin = F_0_ * std::sin(omega_0_);
-            float part1 = std::exp((-M_PI * (pow((x - f_cos), 2) + pow((y - f_sin), 2))) / (a_ * a_));
-            float part2 = std::exp((-M_PI * (pow((x + f_cos), 2) + pow((y + f_sin), 2))) / (a_ * a_));
-            float rst = K_ * (part1 + part2) / (2 * a_ * a_);
-            kernel_fre[row * resolution + col] = uniform(rst);
+            for (unsigned col = 0; col < resolution; ++col)
+            {
+                float x = (float(col) + 0.5) - (float(resolution) / 2.0);
+                float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
+                x = x / (float)resolution;
+                y = y / (float)resolution;
+                float f_cos = F_0_ * std::cos(omega_0_);
+                float f_sin = F_0_ * std::sin(omega_0_);
+                float part1 = std::exp((-M_PI * (pow((x - f_cos), 2) + pow((y - f_sin), 2))) / (a_ * a_));
+                float part2 = std::exp((-M_PI * (pow((x + f_cos), 2) + pow((y + f_sin), 2))) / (a_ * a_));
+                float rst = K_ * (part1 + part2) / (2 * a_ * a_);
+                kernel_fre[row * resolution + col] = uniform(rst);
+            }
+        }
+    }
+    else
+    {
+        Mat input(resolution, resolution, CV_32F);
+        for (unsigned row = 0; row < resolution; ++row)
+        {
+            for (unsigned col = 0; col < resolution; ++col)
+            {
+                input.at<float>(row, col) = image_val[row * resolution + col];
+            }
+        }
+
+        Mat dft_result;
+        dft(input, dft_result, DFT_COMPLEX_OUTPUT);
+
+        Mat planes[2];
+        split(dft_result, planes);
+        Mat magnitude;
+        cv::magnitude(planes[0], planes[1], magnitude);
+
+        magnitude += Scalar::all(1);
+        log(magnitude, magnitude);
+
+        normalize(magnitude, magnitude, 0, 255, NORM_MINMAX);
+
+        int cx = magnitude.cols / 2;
+        int cy = magnitude.rows / 2;
+        Mat q0(magnitude, Rect(0, 0, cx, cy));
+        Mat q1(magnitude, Rect(cx, 0, cx, cy));
+        Mat q2(magnitude, Rect(0, cy, cx, cy));
+        Mat q3(magnitude, Rect(cx, cy, cx, cy));
+        Mat tmp;
+        q0.copyTo(tmp);
+        q3.copyTo(q0);
+        tmp.copyTo(q3);
+        q1.copyTo(tmp);
+        q2.copyTo(q1);
+        tmp.copyTo(q2);
+
+        magnitude.convertTo(magnitude, CV_8U);
+        for (unsigned row = 0; row < resolution; ++row)
+        {
+            for (unsigned col = 0; col < resolution; ++col)
+            {
+                uchar val = magnitude.at<uchar>(row, col);
+                kernel_fre[row * resolution + col] = val;
+                temp_fre[row * resolution + col] = val;
+            }
         }
     }
 
@@ -96,6 +158,7 @@ uchar *process(unsigned resolution, float K_, float a_, float F_0_, float omega_
     delete[] temp_val;
     delete[] temp_fre;
     delete[] kernel_fre;
+    delete noise;
     return window;
 }
 
@@ -110,43 +173,56 @@ int main()
     float number_of_impulses_per_kernel = 64.0;
     unsigned period = 256;
     unsigned random_offset = std::time(0);
+    float perlin_scale = 0.1;
     bool isotropic = false;
+    bool is = false;
+    int noise_type = 0;
 
     // Initialize OpenCV window and cvui
     namedWindow(WINDOW_NAME);
     cvui::init(WINDOW_NAME);
 
     // Generate initial noise image
-    uchar *temp = process(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset);
+    uchar *temp = process(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, noise_type, perlin_scale);
     Mat frame = Mat(512, 512, CV_8UC1, temp);
 
     // Main GUI loop
     while (true)
     {
+        if (is)
+        {
+            temp = process(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, noise_type, perlin_scale);
+            frame = Mat(512, 512, CV_8UC1, temp);
+            is = false;
+        }
+
         // Create settings window
         cvui::window(frame, 0, 0, 256, 256, "Settings");
+        is = cvui::button(frame, 140, 25, "Generate");
 
+        cvui::text(frame, 10, 60, "Noise Type");
         // Generate button
-        bool generate = cvui::button(frame, 140, 25, "Generate");
+        if (cvui::button(frame, 80, 55, "Gabor"))
+            noise_type = 0;
+        if (cvui::button(frame, 140, 55, "Perlin"))
+            noise_type = 1;
 
-        // Checkbox for isotropic/anisotropic mode
-        cvui::checkbox(frame, 30, 30, "isotropic", &isotropic);
-
-        // Parameter sliders
-        cvui::text(frame, 10, 65, "K");
-        cvui::trackbar(frame, 60, 50, 165, &K_, 0.5f, 5.0f);
-        cvui::text(frame, 10, 110, "a");
-        cvui::trackbar(frame, 60, 95, 165, &a_, 0.005f, 0.1f, 1, "%.3Lf");
-        cvui::text(frame, 10, 155, "F");
-        cvui::trackbar(frame, 60, 140, 165, &F_0_, 0.01f, 0.3f, 1, "%.4Lf");
-        cvui::text(frame, 10, 200, "omega");
-        cvui::trackbar(frame, 60, 185, 165, &omega_0_, 0.0f, (float)M_PI, 1, "%.2Lf");
-
-        // Regenerate noise if button is clicked
-        if (generate)
+        if (noise_type == 0)
         {
-            temp = process(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset);
-            frame = Mat(512, 512, CV_8UC1, temp);
+            cvui::checkbox(frame, 30, 90, "Isotropic", &isotropic);
+            cvui::text(frame, 10, 105, "K");
+            cvui::trackbar(frame, 60, 100, 165, &K_, 0.5f, 5.0f);
+            cvui::text(frame, 10, 150, "a");
+            cvui::trackbar(frame, 60, 140, 165, &a_, 0.005f, 0.1f, 1, "%.3Lf");
+            cvui::text(frame, 10, 180, "F");
+            cvui::trackbar(frame, 60, 170, 165, &F_0_, 0.01f, 0.3f, 1, "%.4Lf");
+            cvui::text(frame, 10, 220, "omega");
+            cvui::trackbar(frame, 60, 210, 165, &omega_0_, 0.0f, (float)M_PI, 0.01f, "%.2Lf");
+        }
+        else
+        {
+            cvui::text(frame, 10, 115, "Scale");
+            cvui::trackbar(frame, 60, 100, 165, &perlin_scale, 0.01f, 0.5f, 1, "%.3Lf");
         }
 
         // Update and display GUI
@@ -160,6 +236,5 @@ int main()
         }
     }
 
-    delete[] temp;
     return 0;
 }
