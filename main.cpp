@@ -4,6 +4,7 @@
 #include "noise.h"
 #include <ctime>
 #include <opencv2/opencv.hpp>
+#include <chrono>
 using namespace cv;
 
 // Window name for the GUI
@@ -162,6 +163,164 @@ uchar *process(unsigned resolution, float K_, float a_, float F_0_, float omega_
     return window;
 }
 
+void spectrum_experiment(unsigned resolution, float K_, float a_, float F_0_, float omega_0_, bool isotropic,
+                         float number_of_impulses_per_kernel, unsigned period, unsigned random_offset, float perlin_scale)
+{
+    // Create Gabor and Perlin noise images
+    Noise *gabor = new GaborNoise(K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset);
+    Noise *perlin = new PerlinNoise(perlin_scale, random_offset);
+    Mat gabor_image(resolution, resolution, CV_32F);
+    Mat perlin_image(resolution, resolution, CV_32F);
+
+    for (unsigned row = 0; row < resolution; ++row)
+    {
+        for (unsigned col = 0; col < resolution; ++col)
+        {
+            float x = (float(col) + 0.5) - (float(resolution) / 2.0);
+            float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
+            gabor_image.at<float>(row, col) = gabor->calculate(x, y).noise_val;
+            perlin_image.at<float>(row, col) = perlin->calculate(x, y).noise_val;
+        }
+    }
+
+    // Compute DFT and magnitude spectrum
+    Mat gabor_dft, perlin_dft;
+    dft(gabor_image, gabor_dft, DFT_COMPLEX_OUTPUT);
+    dft(perlin_image, perlin_dft, DFT_COMPLEX_OUTPUT);
+    Mat gabor_planes[2], perlin_planes[2];
+    split(gabor_dft, gabor_planes);
+    split(perlin_dft, perlin_planes);
+    Mat gabor_magnitude, perlin_magnitude;
+    magnitude(gabor_planes[0], gabor_planes[1], gabor_magnitude);
+    magnitude(perlin_planes[0], perlin_planes[1], perlin_magnitude);
+    gabor_magnitude += Scalar::all(1);
+    perlin_magnitude += Scalar::all(1);
+    log(gabor_magnitude, gabor_magnitude);
+    log(perlin_magnitude, perlin_magnitude);
+    normalize(gabor_magnitude, gabor_magnitude, 0, 255, NORM_MINMAX);
+    normalize(perlin_magnitude, perlin_magnitude, 0, 255, NORM_MINMAX);
+    gabor_magnitude.convertTo(gabor_magnitude, CV_8U);
+    perlin_magnitude.convertTo(perlin_magnitude, CV_8U);
+
+    // Create a comparison image
+    Mat compare(resolution, resolution * 2, CV_8U);
+    gabor_magnitude.copyTo(compare(Rect(0, 0, resolution, resolution)));
+    perlin_magnitude.copyTo(compare(Rect(resolution, 0, resolution, resolution)));
+    imshow("Spectrum Comparison", compare);
+
+    delete gabor;
+    delete perlin;
+}
+
+void anisotropy_experiment(unsigned resolution, float K_, float a_, float F_0_, float omega_0_, bool isotropic,
+                           float number_of_impulses_per_kernel, unsigned period, unsigned random_offset, float perlin_scale)
+{
+    std::vector<float> omega_values = {0.0f, M_PI / 4.0f, M_PI / 2.0f};
+    std::vector<Mat> images;
+    images.push_back(Mat(resolution, resolution, CV_8U)); // Perlin
+    for (float omega : omega_values)
+    {
+        images.push_back(Mat(resolution, resolution, CV_8U)); // Gabor with different omega
+    }
+
+    // Produce Perlin noise
+    Noise *perlin = new PerlinNoise(perlin_scale, random_offset);
+    for (unsigned row = 0; row < resolution; ++row)
+    {
+        for (unsigned col = 0; col < resolution; ++col)
+        {
+            float x = (float(col) + 0.5) - (float(resolution) / 2.0);
+            float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
+            float val = perlin->calculate(x, y).noise_val;
+            images[0].at<uchar>(row, col) = uniform(0.5 + 0.5 * val / (3.0 * sqrt(perlin->variance())));
+        }
+    }
+
+    // Produce Gabor noise with different omega values
+    int idx = 1;
+    for (float omega : omega_values)
+    {
+        Noise *gabor = new GaborNoise(K_, a_, F_0_, omega, isotropic, number_of_impulses_per_kernel, period, random_offset);
+        for (unsigned row = 0; row < resolution; ++row)
+        {
+            for (unsigned col = 0; col < resolution; ++col)
+            {
+                float x = (float(col) + 0.5) - (float(resolution) / 2.0);
+                float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
+                float val = gabor->calculate(x, y).noise_val;
+                images[idx].at<uchar>(row, col) = uniform(0.5 + 0.5 * val / (3.0 * sqrt(gabor->variance())));
+            }
+        }
+        idx++;
+        delete gabor;
+    }
+    delete perlin;
+
+    // Create a comparison image
+    Mat compare(resolution, resolution * 4, CV_8U);
+    for (int i = 0; i < 4; ++i)
+    {
+        images[i].copyTo(compare(Rect(i * resolution, 0, resolution, resolution)));
+    }
+    imshow("Anisotropy Comparison", compare);
+}
+
+void performance_experiment(unsigned resolution, float K_, float a_, float F_0_, float omega_0_, bool isotropic,
+                            float number_of_impulses_per_kernel, unsigned period, unsigned random_offset, float perlin_scale)
+{
+    std::vector<float> impulse_densities = {20.0f, 30.0f, 40.0f, 50.0f};
+    std::vector<float> gabor_fps, gabor_mpixels;
+    float perlin_fps = 0.0f, perlin_mpixels = 0.0f;
+
+    Mat temp_image(resolution, resolution, CV_32F);
+
+    // Test Perlin noise
+    Noise *perlin = new PerlinNoise(perlin_scale, random_offset);
+    auto start = std::chrono::high_resolution_clock::now();
+    for (unsigned row = 0; row < resolution; ++row)
+    {
+        for (unsigned col = 0; col < resolution; ++col)
+        {
+            float x = (float(col) + 0.5) - (float(resolution) / 2.0);
+            float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
+            temp_image.at<float>(row, col) = perlin->calculate(x, y).noise_val; // Directly use noise_val
+        }
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    float ms = std::chrono::duration<float, std::milli>(end - start).count();
+    perlin_fps = 1000.0f / ms;
+    perlin_mpixels = (resolution * resolution * perlin_fps) / 1e6;
+    delete perlin;
+
+    // Test Gabor noise with different impulse densities
+    for (float impulses : impulse_densities)
+    {
+        Noise *gabor = new GaborNoise(K_, a_, F_0_, omega_0_, isotropic, impulses, period, random_offset);
+        start = std::chrono::high_resolution_clock::now();
+        for (unsigned row = 0; row < resolution; ++row)
+        {
+            for (unsigned col = 0; col < resolution; ++col)
+            {
+                float x = (float(col) + 0.5) - (float(resolution) / 2.0);
+                float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
+                temp_image.at<float>(row, col) = gabor->calculate(x, y).noise_val;
+            }
+        }
+        end = std::chrono::high_resolution_clock::now();
+        ms = std::chrono::duration<float, std::milli>(end - start).count();
+        gabor_fps.push_back(1000.0f / ms);
+        gabor_mpixels.push_back((resolution * resolution * gabor_fps.back()) / 1e6);
+        delete gabor;
+    }
+
+    // Show results
+    printf("Perlin: FPS=%.2f, MPixels/s=%.2f\n", perlin_fps, perlin_mpixels);
+    for (size_t i = 0; i < impulse_densities.size(); ++i)
+    {
+        printf("Gabor (Impulses=%.0f): FPS=%.2f, MPixels/s=%.2f\n", impulse_densities[i], gabor_fps[i], gabor_mpixels[i]);
+    }
+}
+
 int main()
 {
     // Initialize default parameters
@@ -175,65 +334,90 @@ int main()
     unsigned random_offset = std::time(0);
     float perlin_scale = 0.1;
     bool isotropic = false;
-    bool is = false;
+    bool isExperimentMode = false;
     int noise_type = 0;
+    bool paramsChanged = true;
+    bool prevMode = false;
 
     // Initialize OpenCV window and cvui
     namedWindow(WINDOW_NAME);
     cvui::init(WINDOW_NAME);
 
     // Generate initial noise image
-    uchar *temp = process(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, noise_type, perlin_scale);
-    Mat frame = Mat(512, 512, CV_8UC1, temp);
+    Mat frame = Mat(512, 512, CV_8UC1, process(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, noise_type, perlin_scale));
 
-    // Main GUI loop
     while (true)
     {
-        if (is)
+        // Check if the window is still open
+        if (cv::getWindowProperty(WINDOW_NAME, cv::WND_PROP_VISIBLE) < 1)
+            break;
+
+        // Only update the frame if parameters have changed or if in experiment mode
+        if (paramsChanged || (isExperimentMode && !prevMode))
         {
-            temp = process(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, noise_type, perlin_scale);
-            frame = Mat(512, 512, CV_8UC1, temp);
-            is = false;
+            frame = Mat(512, 512, CV_8UC1, process(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, noise_type, perlin_scale));
+            paramsChanged = false;
         }
+        prevMode = isExperimentMode;
 
-        // Create settings window
-        cvui::window(frame, 0, 0, 256, 256, "Settings");
-        is = cvui::button(frame, 140, 25, "Generate");
-
-        cvui::text(frame, 10, 60, "Noise Type");
-        // Generate button
-        if (cvui::button(frame, 80, 55, "Gabor"))
-            noise_type = 0;
-        if (cvui::button(frame, 140, 55, "Perlin"))
-            noise_type = 1;
-
-        if (noise_type == 0)
+        if (!isExperimentMode)
         {
-            cvui::checkbox(frame, 30, 90, "Isotropic", &isotropic);
-            cvui::text(frame, 10, 105, "K");
-            cvui::trackbar(frame, 60, 100, 165, &K_, 0.5f, 5.0f);
-            cvui::text(frame, 10, 150, "a");
-            cvui::trackbar(frame, 60, 140, 165, &a_, 0.005f, 0.1f, 1, "%.3Lf");
-            cvui::text(frame, 10, 180, "F");
-            cvui::trackbar(frame, 60, 170, 165, &F_0_, 0.01f, 0.3f, 1, "%.4Lf");
-            cvui::text(frame, 10, 220, "omega");
-            cvui::trackbar(frame, 60, 210, 165, &omega_0_, 0.0f, (float)M_PI, 0.01f, "%.2Lf");
+            cvui::window(frame, 0, 0, 256, 256, "Settings");
+            if (cvui::button(frame, 140, 25, "Generate"))
+            {
+                paramsChanged = true;
+            }
+            if (cvui::button(frame, 80, 55, "Gabor"))
+            {
+                noise_type = 0;
+            }
+            if (cvui::button(frame, 140, 55, "Perlin"))
+            {
+                noise_type = 1;
+            }
+            if (noise_type == 0)
+            {
+                cvui::checkbox(frame, 0, 55, "Isotropic", &isotropic);
+                cvui::text(frame, 10, 105, "K");
+                cvui::trackbar(frame, 60, 90, 165, &K_, 0.5f, 5.0f);
+                cvui::text(frame, 10, 150, "a");
+                cvui::trackbar(frame, 60, 130, 165, &a_, 0.005f, 0.1f, 1, "%.3Lf");
+                cvui::text(frame, 10, 180, "F");
+                cvui::trackbar(frame, 60, 170, 165, &F_0_, 0.01f, 0.3f, 1, "%.4Lf");
+                cvui::text(frame, 10, 220, "omega");
+                cvui::trackbar(frame, 60, 210, 165, &omega_0_, 0.0f, (float)M_PI, 0.01f, "%.2Lf");
+            }
+            else
+            {
+                cvui::text(frame, 10, 115, "Scale");
+                cvui::trackbar(frame, 60, 100, 165, &perlin_scale, 0.01f, 0.15f, 1, "%.3Lf");
+            }
+            if (cvui::button(frame, 0, 25, "Experiments"))
+                isExperimentMode = true;
         }
         else
         {
-            cvui::text(frame, 10, 115, "Scale");
-            cvui::trackbar(frame, 60, 100, 165, &perlin_scale, 0.01f, 0.5f, 1, "%.3Lf");
+            cvui::window(frame, 0, 0, 256, 25, "Experiments");
+            if (cvui::button(frame, 20, 30, "Spectrum Experiment"))
+            {
+                spectrum_experiment(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, perlin_scale);
+            }
+            if (cvui::button(frame, 20, 70, "Anisotropy Experiment"))
+            {
+                anisotropy_experiment(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, perlin_scale);
+            }
+            if (cvui::button(frame, 20, 150, "Performance Experiment"))
+            {
+                performance_experiment(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, perlin_scale);
+            }
+            if (cvui::button(frame, 20, 230, "Back to Settings"))
+                isExperimentMode = false;
         }
 
-        // Update and display GUI
         cvui::update();
         imshow(WINDOW_NAME, frame);
-
-        // Exit on ESC key
         if (waitKey(30) == 27)
-        {
             break;
-        }
     }
 
     return 0;
