@@ -348,9 +348,6 @@ int main()
 
     while (true)
     {
-        // Check if the window is still open
-        if (cv::getWindowProperty(WINDOW_NAME, cv::WND_PROP_VISIBLE) < 1)
-            break;
 
         // Only update the frame if parameters have changed or if in experiment mode
         if (paramsChanged || (isExperimentMode && !prevMode))
@@ -390,7 +387,7 @@ int main()
             else
             {
                 cvui::text(frame, 10, 115, "Scale");
-                cvui::trackbar(frame, 60, 100, 165, &perlin_scale, 0.01f, 0.15f, 1, "%.3Lf");
+                cvui::trackbar(frame, 60, 100, 165, &perlin_scale, 0.01f, 0.1f, 1, "%.3Lf");
             }
             if (cvui::button(frame, 0, 25, "Experiments"))
                 isExperimentMode = true;
