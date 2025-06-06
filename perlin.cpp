@@ -28,7 +28,9 @@ float PerlinNoise::dot_grid_gradient(int ix, int iy, float x, float y)
 {
     float dx = x - (float)ix;
     float dy = y - (float)iy;
-    int index = (iy % grid_size_) * grid_size_ * 2 + (ix % grid_size_) * 2;
+    int ix_mod = (ix % grid_size_ + grid_size_) % grid_size_;
+    int iy_mod = (iy % grid_size_ + grid_size_) % grid_size_;
+    int index = iy_mod * grid_size_ * 2 + ix_mod * 2;
     return dx * gradients_[index] + dy * gradients_[index + 1];
 }
 
