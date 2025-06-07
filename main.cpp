@@ -163,161 +163,88 @@ uchar *process(unsigned resolution, float K_, float a_, float F_0_, float omega_
     return window;
 }
 
-void spectrum_experiment(unsigned resolution, float K_, float a_, float F_0_, float omega_0_, bool isotropic,
-                         float number_of_impulses_per_kernel, unsigned period, unsigned random_offset, float perlin_scale)
-{
-    // Create Gabor and Perlin noise images
-    Noise *gabor = new GaborNoise(K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset);
-    Noise *perlin = new PerlinNoise(perlin_scale, random_offset);
-    Mat gabor_image(resolution, resolution, CV_32F);
-    Mat perlin_image(resolution, resolution, CV_32F);
-
-    for (unsigned row = 0; row < resolution; ++row)
-    {
-        for (unsigned col = 0; col < resolution; ++col)
-        {
-            float x = (float(col) + 0.5) - (float(resolution) / 2.0);
-            float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
-            gabor_image.at<float>(row, col) = gabor->calculate(x, y).noise_val;
-            perlin_image.at<float>(row, col) = perlin->calculate(x, y).noise_val;
-        }
-    }
-
-    // Compute DFT and magnitude spectrum
-    Mat gabor_dft, perlin_dft;
-    dft(gabor_image, gabor_dft, DFT_COMPLEX_OUTPUT);
-    dft(perlin_image, perlin_dft, DFT_COMPLEX_OUTPUT);
-    Mat gabor_planes[2], perlin_planes[2];
-    split(gabor_dft, gabor_planes);
-    split(perlin_dft, perlin_planes);
-    Mat gabor_magnitude, perlin_magnitude;
-    magnitude(gabor_planes[0], gabor_planes[1], gabor_magnitude);
-    magnitude(perlin_planes[0], perlin_planes[1], perlin_magnitude);
-    gabor_magnitude += Scalar::all(1);
-    perlin_magnitude += Scalar::all(1);
-    log(gabor_magnitude, gabor_magnitude);
-    log(perlin_magnitude, perlin_magnitude);
-    normalize(gabor_magnitude, gabor_magnitude, 0, 255, NORM_MINMAX);
-    normalize(perlin_magnitude, perlin_magnitude, 0, 255, NORM_MINMAX);
-    gabor_magnitude.convertTo(gabor_magnitude, CV_8U);
-    perlin_magnitude.convertTo(perlin_magnitude, CV_8U);
-
-    // Create a comparison image
-    Mat compare(resolution, resolution * 2, CV_8U);
-    gabor_magnitude.copyTo(compare(Rect(0, 0, resolution, resolution)));
-    perlin_magnitude.copyTo(compare(Rect(resolution, 0, resolution, resolution)));
-    imshow("Spectrum Comparison", compare);
-
-    delete gabor;
-    delete perlin;
-}
-
-void anisotropy_experiment(unsigned resolution, float K_, float a_, float F_0_, float omega_0_, bool isotropic,
-                           float number_of_impulses_per_kernel, unsigned period, unsigned random_offset, float perlin_scale)
-{
-    std::vector<float> omega_values = {0.0f, M_PI / 4.0f, M_PI / 2.0f};
-    std::vector<Mat> images;
-    images.push_back(Mat(resolution, resolution, CV_8U)); // Perlin
-    for (float omega : omega_values)
-    {
-        images.push_back(Mat(resolution, resolution, CV_8U)); // Gabor with different omega
-    }
-
-    // Produce Perlin noise
-    Noise *perlin = new PerlinNoise(perlin_scale, random_offset);
-    for (unsigned row = 0; row < resolution; ++row)
-    {
-        for (unsigned col = 0; col < resolution; ++col)
-        {
-            float x = (float(col) + 0.5) - (float(resolution) / 2.0);
-            float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
-            float val = perlin->calculate(x, y).noise_val;
-            images[0].at<uchar>(row, col) = uniform(0.5 + 0.5 * val / (3.0 * sqrt(perlin->variance())));
-        }
-    }
-
-    // Produce Gabor noise with different omega values
-    int idx = 1;
-    for (float omega : omega_values)
-    {
-        Noise *gabor = new GaborNoise(K_, a_, F_0_, omega, isotropic, number_of_impulses_per_kernel, period, random_offset);
-        for (unsigned row = 0; row < resolution; ++row)
-        {
-            for (unsigned col = 0; col < resolution; ++col)
-            {
-                float x = (float(col) + 0.5) - (float(resolution) / 2.0);
-                float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
-                float val = gabor->calculate(x, y).noise_val;
-                images[idx].at<uchar>(row, col) = uniform(0.5 + 0.5 * val / (3.0 * sqrt(gabor->variance())));
-            }
-        }
-        idx++;
-        delete gabor;
-    }
-    delete perlin;
-
-    // Create a comparison image
-    Mat compare(resolution, resolution * 4, CV_8U);
-    for (int i = 0; i < 4; ++i)
-    {
-        images[i].copyTo(compare(Rect(i * resolution, 0, resolution, resolution)));
-    }
-    imshow("Anisotropy Comparison", compare);
-}
-
 void performance_experiment(unsigned resolution, float K_, float a_, float F_0_, float omega_0_, bool isotropic,
                             float number_of_impulses_per_kernel, unsigned period, unsigned random_offset, float perlin_scale)
 {
+    const unsigned RESOLUTION = 512;
     std::vector<float> impulse_densities = {20.0f, 30.0f, 40.0f, 50.0f};
-    std::vector<float> gabor_fps, gabor_mpixels;
-    float perlin_fps = 0.0f, perlin_mpixels = 0.0f;
+    const int NUM_RUNS = 5;
 
-    Mat temp_image(resolution, resolution, CV_32F);
+    std::vector<double> perlin_times, gabor_times;
 
-    // Test Perlin noise
-    Noise *perlin = new PerlinNoise(perlin_scale, random_offset);
-    auto start = std::chrono::high_resolution_clock::now();
-    for (unsigned row = 0; row < resolution; ++row)
+    // Test Perlin Noise
+    for (int run = 0; run < NUM_RUNS; ++run)
     {
-        for (unsigned col = 0; col < resolution; ++col)
+        Noise *perlin = new PerlinNoise(perlin_scale, random_offset);
+        Mat temp_image(RESOLUTION, RESOLUTION, CV_32F);
+        auto start = std::chrono::high_resolution_clock::now();
+        for (unsigned row = 0; row < RESOLUTION; ++row)
         {
-            float x = (float(col) + 0.5) - (float(resolution) / 2.0);
-            float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
-            temp_image.at<float>(row, col) = perlin->calculate(x, y).noise_val; // Directly use noise_val
+            for (unsigned col = 0; col < RESOLUTION; ++col)
+            {
+                float x = (float(col) + 0.5) - (float(RESOLUTION) / 2.0);
+                float y = (float(RESOLUTION - row - 1) + 0.5) - (float(RESOLUTION) / 2.0);
+                temp_image.at<float>(row, col) = perlin->calculate(x, y).noise_val;
+            }
         }
+        auto end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(end - start).count();
+        perlin_times.push_back(ms);
+        delete perlin;
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    float ms = std::chrono::duration<float, std::milli>(end - start).count();
-    perlin_fps = 1000.0f / ms;
-    perlin_mpixels = (resolution * resolution * perlin_fps) / 1e6;
-    delete perlin;
 
     // Test Gabor noise with different impulse densities
     for (float impulses : impulse_densities)
     {
-        Noise *gabor = new GaborNoise(K_, a_, F_0_, omega_0_, isotropic, impulses, period, random_offset);
-        start = std::chrono::high_resolution_clock::now();
-        for (unsigned row = 0; row < resolution; ++row)
+        for (int run = 0; run < NUM_RUNS; ++run)
         {
-            for (unsigned col = 0; col < resolution; ++col)
+            Noise *gabor = new GaborNoise(K_, a_, F_0_, omega_0_, isotropic, impulses, period, random_offset);
+            Mat temp_image(RESOLUTION, RESOLUTION, CV_32F);
+            auto start = std::chrono::high_resolution_clock::now();
+            for (unsigned row = 0; row < RESOLUTION; ++row)
             {
-                float x = (float(col) + 0.5) - (float(resolution) / 2.0);
-                float y = (float(resolution - row - 1) + 0.5) - (float(resolution) / 2.0);
-                temp_image.at<float>(row, col) = gabor->calculate(x, y).noise_val;
+                for (unsigned col = 0; col < RESOLUTION; ++col)
+                {
+                    float x = (float(col) + 0.5) - (float(RESOLUTION) / 2.0);
+                    float y = (float(RESOLUTION - row - 1) + 0.5) - (float(RESOLUTION) / 2.0);
+                    temp_image.at<float>(row, col) = gabor->calculate(x, y).noise_val;
+                }
             }
+            auto end = std::chrono::high_resolution_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(end - start).count();
+            gabor_times.push_back(ms);
+            delete gabor;
         }
-        end = std::chrono::high_resolution_clock::now();
-        ms = std::chrono::duration<float, std::milli>(end - start).count();
-        gabor_fps.push_back(1000.0f / ms);
-        gabor_mpixels.push_back((resolution * resolution * gabor_fps.back()) / 1e6);
-        delete gabor;
     }
 
-    // Show results
-    printf("Perlin: FPS=%.2f, MPixels/s=%.2f\n", perlin_fps, perlin_mpixels);
-    for (size_t i = 0; i < impulse_densities.size(); ++i)
+    // Calculate average and standard deviation
+    double perlin_avg = 0.0, perlin_std = 0.0, gabor_avg = 0.0, gabor_std = 0.0;
+    for (double t : perlin_times)
+        perlin_avg += t;
+    for (double t : gabor_times)
+        gabor_avg += t;
+    perlin_avg /= NUM_RUNS;
+    gabor_avg /= (NUM_RUNS * impulse_densities.size());
+    for (double t : perlin_times)
+        perlin_std += (t - perlin_avg) * (t - perlin_avg);
+    for (double t : gabor_times)
+        gabor_std += (t - gabor_avg) * (t - gabor_avg);
+    perlin_std = std::sqrt(perlin_std / NUM_RUNS);
+    gabor_std = std::sqrt(gabor_std / (NUM_RUNS * impulse_densities.size()));
+
+    float perlin_fps = 1000.0f / perlin_avg;
+    float gabor_fps = 1000.0f / gabor_avg;
+    float perlin_mps = (RESOLUTION * RESOLUTION * perlin_fps) / 1e6;
+    float gabor_mps = (RESOLUTION * RESOLUTION * gabor_fps) / 1e6;
+
+    printf("Resolution=%u x %u:\n", RESOLUTION, RESOLUTION);
+    printf("Perlin: FPS=%.2f, MPixels/s=%.2f\n", perlin_fps, perlin_mps);
+
+    for (float impulses : impulse_densities)
     {
-        printf("Gabor (Impulses=%.0f): FPS=%.2f, MPixels/s=%.2f\n", impulse_densities[i], gabor_fps[i], gabor_mpixels[i]);
+        float fps = 1000.0f / (gabor_times[(int)impulses / 20 - 1] / NUM_RUNS);
+        float mps = (RESOLUTION * RESOLUTION * fps) / 1e6;
+        printf("Gabor (#impulses/cell=%.0f): FPS=%.2f, MPixels/s=%.2f\n", impulses, fps, mps);
     }
 }
 
@@ -395,19 +322,12 @@ int main()
         else
         {
             cvui::window(frame, 0, 0, 256, 25, "Experiments");
-            if (cvui::button(frame, 20, 30, "Spectrum Experiment"))
-            {
-                spectrum_experiment(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, perlin_scale);
-            }
-            if (cvui::button(frame, 20, 70, "Anisotropy Experiment"))
-            {
-                anisotropy_experiment(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, perlin_scale);
-            }
-            if (cvui::button(frame, 20, 150, "Performance Experiment"))
+            if (cvui::button(frame, 20, 30, "Performance Experiment"))
             {
                 performance_experiment(resolution, K_, a_, F_0_, omega_0_, isotropic, number_of_impulses_per_kernel, period, random_offset, perlin_scale);
             }
-            if (cvui::button(frame, 20, 230, "Back to Settings"))
+
+            if (cvui::button(frame, 20, 70, "Back to Settings"))
                 isExperimentMode = false;
         }
 
